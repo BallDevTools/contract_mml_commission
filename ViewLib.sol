@@ -91,4 +91,40 @@ library ViewLib {
     ) internal view returns (uint256) {
         return member == owner && members[member].planId == 0 ? 999 : members[member].planId;
     }
+
+    function getPlanCycleInfo(uint256 planId, uint256 planCount, mapping(uint256 => MembershipLib.CycleInfo) storage planCycles, mapping(uint256 => MembershipLib.MembershipPlan) storage plans) internal view returns (uint256 currentCycle, uint256 membersInCurrentCycle, uint256 membersPerCycle) {
+        if (planId == 0 || planId > planCount) revert ContractErrors.InvalidPlanID();
+        MembershipLib.CycleInfo memory cycleInfo = planCycles[planId];
+        return (cycleInfo.currentCycle, cycleInfo.membersInCurrentCycle, plans[planId].membersPerCycle);
+    }
+
+    function getNFTImageData(uint256 tokenId, mapping(uint256 => NFTTypes.NFTImage) storage tokenImages) internal view returns (string memory imageURI, string memory name, string memory description, uint256 planId, uint256 createdAt) {
+        NFTTypes.NFTImage memory image = tokenImages[tokenId];
+        return (image.imageURI, image.name, image.description, image.planId, image.createdAt);
+    }
+
+    function getReferralChain(address member, mapping(address => MembershipLib.Member) storage members) internal view returns (address[] memory) {
+        address[] memory chain = new address[](1);
+        chain[0] = members[member].upline;
+        return chain;
+    }
+
+    function getOwnerEffectivePlan(address sender, address owner, mapping(address => MembershipLib.Member) storage members, uint256 planCount) internal view returns (uint256) {
+        if (sender == owner && members[sender].planId == 0) {
+            return planCount;
+        }
+        return members[sender].planId;
+    }
+
+    function getTotalPlanCount(uint256 planCount) internal pure returns (uint256) {
+        return planCount;
+    }
+
+    function isTokenTransferable() internal pure returns (bool) {
+        return false;
+    }
+
+    function isOwnerWithRootAccess(address _address, address owner, mapping(address => MembershipLib.Member) storage members) internal view returns (bool) {
+        return _address == owner && members[_address].planId == 0;
+    }
 }
