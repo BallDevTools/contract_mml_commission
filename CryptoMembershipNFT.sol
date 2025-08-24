@@ -12,6 +12,8 @@ import "./MembershipLib.sol";
 import "./TokenLib.sol";
 import "./ContractErrors.sol";
 import "./GrowthCommissionLib.sol";
+import "./AdminLib.sol";
+import "./ViewLib.sol";
 
 contract CryptoMembershipNFT is ERC721Enumerable, Ownable, ReentrancyGuard {
     using TokenLib for IERC20;
@@ -55,24 +57,17 @@ contract CryptoMembershipNFT is ERC721Enumerable, Ownable, ReentrancyGuard {
     mapping(address => address[]) private _referralChain;
     bool private _inTransaction;
 
-    // Reduced events (keep only essential ones)
+    // Essential events only
     event PlanCreated(uint256 planId, string name, uint256 price, uint256 membersPerCycle);
-    event MemberRegistered(address indexed member, address indexed upline, uint256 planId, uint256 cycleNumber);
+    event MemberRegistered(address indexed member, address indexed upline, uint256 planId);
     event ReferralPaid(address indexed from, address indexed to, uint256 amount);
-    event PlanUpgraded(address indexed member, uint256 oldPlanId, uint256 newPlanId, uint256 cycleNumber);
-    event PlanPriceUpdated(uint256 indexed planId, uint256 oldPrice, uint256 newPrice);
+    event PlanUpgraded(address indexed member, uint256 oldPlanId, uint256 newPlanId);
     event NewCycleStarted(uint256 planId, uint256 cycleNumber);
     event EmergencyWithdraw(address indexed to, uint256 amount);
     event ContractPaused(bool status);
     event FundsDistributed(uint256 ownerAmount, uint256 feeAmount, uint256 fundAmount);
     event MemberExited(address indexed member, uint256 refundAmount);
-    event BatchWithdrawalProcessed(uint256 totalOwner, uint256 totalFee, uint256 totalFund);
     event EmergencyWithdrawRequested(uint256 timestamp);
-    event EmergencyWithdrawInitiated(uint256 timestamp, uint256 amount);
-    event MetadataUpdated(uint256 indexed tokenId, string newURI);
-    event TransferAttemptBlocked(address indexed from, address indexed to, uint256 tokenId);
-    event MembershipMinted(address indexed to, uint256 tokenId, string message);
-    event OwnerRootMembershipCreated(address indexed owner, uint256 timestamp);
 
     modifier whenNotPaused() {
         if (state.paused) revert ContractErrors.Paused();
@@ -114,12 +109,11 @@ contract CryptoMembershipNFT is ERC721Enumerable, Ownable, ReentrancyGuard {
 
     function _createOwnerRootMembership(address ownerAddress) internal {
         uint256 tokenId = state.tokenIdCounter++;
-        _safeMintWithNotice(ownerAddress, tokenId);
+        _safeMint(ownerAddress, tokenId);
         _setTokenImage(tokenId, state.planCount);
         members[ownerAddress] = MembershipLib.Member(address(0), 0, 0, 0, 1, block.timestamp);
         state.firstMemberRegistered = true;
-        emit OwnerRootMembershipCreated(ownerAddress, block.timestamp);
-        emit MemberRegistered(ownerAddress, address(0), 0, 1);
+        emit MemberRegistered(ownerAddress, address(0), 0);
     }
 
     function _setupDefaultImages() internal {
@@ -164,7 +158,6 @@ contract CryptoMembershipNFT is ERC721Enumerable, Ownable, ReentrancyGuard {
     function _update(address to, uint256 tokenId, address auth) internal override returns (address) {
         address from = _ownerOf(tokenId);
         if (from != address(0) && to != address(0)) {
-            emit TransferAttemptBlocked(from, to, tokenId);
             revert ContractErrors.NonTransferable();
         }
         return super._update(to, tokenId, auth);
@@ -188,14 +181,14 @@ contract CryptoMembershipNFT is ERC721Enumerable, Ownable, ReentrancyGuard {
         usdtToken.safeTransferFrom(msg.sender, address(this), plans[_planId].price);
 
         uint256 tokenId = state.tokenIdCounter++;
-        _safeMintWithNotice(msg.sender, tokenId);
+        _safeMint(msg.sender, tokenId);
         _setTokenImage(tokenId, _planId);
 
         _updateCycleInfo(_planId);
         _createMember(finalUpline, _planId);
         _distributeFundsAndCommission(_planId, finalUpline);
 
-        emit MemberRegistered(msg.sender, finalUpline, _planId, planCycles[_planId].currentCycle);
+        emit MemberRegistered(msg.sender, finalUpline, _planId);
     }
 
     function _updateCycleInfo(uint256 _planId) internal {
@@ -224,7 +217,6 @@ contract CryptoMembershipNFT is ERC721Enumerable, Ownable, ReentrancyGuard {
 
         _handleUplinePayment(finalUpline, uplineShare);
 
-        // Process Growth Commission
         GrowthCommissionLib.CommissionParams memory params = GrowthCommissionLib.CommissionParams({
             newMember: msg.sender,
             planId: _planId,
@@ -271,7 +263,7 @@ contract CryptoMembershipNFT is ERC721Enumerable, Ownable, ReentrancyGuard {
         uint256 oldPlanId = member.planId;
 
         if (isOwnerUpgrading && member.planId == 0) {
-            _completeOwnerUpgrade(_newPlanId, oldPlanId);
+            _completeOwnerUpgrade(_newPlanId);
             return;
         }
 
@@ -293,14 +285,13 @@ contract CryptoMembershipNFT is ERC721Enumerable, Ownable, ReentrancyGuard {
         _completeUpgradePlan(_newPlanId, oldPlanId, upline, priceDifference, isOwnerUpgrading);
     }
 
-    function _completeOwnerUpgrade(uint256 _newPlanId, uint256 /* oldPlanId */) private {
+    function _completeOwnerUpgrade(uint256 _newPlanId) private {
         uint256 tokenId = tokenOfOwnerByIndex(msg.sender, 0);
         NFTImage storage image = tokenImages[tokenId];
         image.planId = _newPlanId;
         image.name = plans[_newPlanId].name;
         image.description = string(abi.encodePacked("Crypto Membership NFT - ", image.name, " Plan (ROOT ACCESS)"));
         image.imageURI = planDefaultImages[_newPlanId];
-        emit MetadataUpdated(tokenId, tokenURI(tokenId));
     }
 
     function _completeUpgradePlan(
@@ -338,7 +329,6 @@ contract CryptoMembershipNFT is ERC721Enumerable, Ownable, ReentrancyGuard {
 
             _handleUplinePayment(upline, uplineShare);
             
-            // Process Growth Commission for upgrades to Plans 1-3
             GrowthCommissionLib.CommissionParams memory upgradeParams = GrowthCommissionLib.CommissionParams({
                 newMember: msg.sender,
                 planId: _newPlanId,
@@ -354,13 +344,7 @@ contract CryptoMembershipNFT is ERC721Enumerable, Ownable, ReentrancyGuard {
             emit FundsDistributed(ownerShare, feeShare, fundShare);
         }
 
-        emit PlanUpgraded(msg.sender, oldPlanId, _newPlanId, cycleInfo.currentCycle);
-        emit MetadataUpdated(tokenId, tokenURI(tokenId));
-    }
-
-    function _safeMintWithNotice(address to, uint256 tokenId) internal {
-        _safeMint(to, tokenId);
-        emit MembershipMinted(to, tokenId, "Non-transferable");
+        emit PlanUpgraded(msg.sender, oldPlanId, _newPlanId);
     }
 
     function _setTokenImage(uint256 tokenId, uint256 planId) private {
@@ -419,7 +403,7 @@ contract CryptoMembershipNFT is ERC721Enumerable, Ownable, ReentrancyGuard {
         emit MemberExited(msg.sender, refundAmount);
     }
 
-    // Growth Commission Public Functions
+    // Growth Commission Functions
     function getGrowthCommissionStats(address leader) external view returns (GrowthCommissionLib.GrowthCommissionStats memory) {
         return growthCommission.stats[leader];
     }
@@ -427,21 +411,6 @@ contract CryptoMembershipNFT is ERC721Enumerable, Ownable, ReentrancyGuard {
     function checkMilestoneEligibility(address member) external view returns (bool eligible, address milestoneLeader) {
         milestoneLeader = GrowthCommissionLib.findMilestoneLeader(members, member, owner());
         eligible = milestoneLeader != address(0);
-    }
-
-    function getGrowthCommissionRate(uint256 planId) external view returns (uint256) {
-        return growthCommission.rates[planId];
-    }
-
-    function previewGrowthCommission(address member, uint256 planId) external view returns (uint256 commission, address recipient) {
-        GrowthCommissionLib.PreviewParams memory params = GrowthCommissionLib.PreviewParams({
-            member: member,
-            planId: planId,
-            ownerBalance: state.ownerBalance,
-            owner: owner()
-        });
-        
-        return GrowthCommissionLib.previewCommission(growthCommission, members, plans, params);
     }
 
     function setGrowthCommissionRate(uint256 planId, uint256 rate) external onlyOwner {
@@ -452,15 +421,7 @@ contract CryptoMembershipNFT is ERC721Enumerable, Ownable, ReentrancyGuard {
         GrowthCommissionLib.setStatus(growthCommission, enabled);
     }
 
-    function emergencyPauseGrowthCommission() external onlyOwner {
-        GrowthCommissionLib.setStatus(growthCommission, false);
-    }
-
-    function getGrowthCommissionSystemStats() external view returns (bool enabled, uint256 totalPaid, uint256 plan1Rate, uint256 plan2Rate, uint256 plan3Rate) {
-        return (growthCommission.enabled, growthCommission.totalPaid, growthCommission.rates[1], growthCommission.rates[2], growthCommission.rates[3]);
-    }
-
-    // Essential functions only
+    // Admin Functions (using AdminLib)
     function withdrawOwnerBalance(uint256 amount) external onlyOwner nonReentrant noReentrantTransfer {
         if (amount > state.ownerBalance) revert ContractErrors.LowOwnerBalance();
         state.ownerBalance -= amount;
@@ -473,98 +434,27 @@ contract CryptoMembershipNFT is ERC721Enumerable, Ownable, ReentrancyGuard {
         usdtToken.safeTransfer(owner(), amount);
     }
 
-    function withdrawFundBalance(uint256 amount) external onlyOwner nonReentrant noReentrantTransfer {
-        if (amount > state.fundBalance) revert ContractErrors.LowFundBalance();
-        state.fundBalance -= amount;
-        usdtToken.safeTransfer(owner(), amount);
+    function batchWithdraw(AdminLib.WithdrawalRequest[] calldata requests) external onlyOwner nonReentrant noReentrantTransfer {
+        (uint256 newOwnerBalance, uint256 newFeeBalance, uint256 newFundBalance) = AdminLib.processBatchWithdraw(
+            usdtToken, requests, state.ownerBalance, state.feeSystemBalance, state.fundBalance
+        );
+        
+        state.ownerBalance = newOwnerBalance;
+        state.feeSystemBalance = newFeeBalance;
+        state.fundBalance = newFundBalance;
     }
 
-    struct WithdrawalRequest {
-        address recipient;
-        uint256 amount;
-        uint256 balanceType;
-    }
-
-    function batchWithdraw(WithdrawalRequest[] calldata requests) external onlyOwner nonReentrant noReentrantTransfer {
-        if (requests.length == 0 || requests.length > 20) revert ContractErrors.InvalidRequests();
-
-        uint256 totalOwner;
-        uint256 totalFee;
-        uint256 totalFund;
-
-        for (uint256 i = 0; i < requests.length; ) {
-            WithdrawalRequest calldata req = requests[i];
-            if (req.recipient == address(0) || req.amount == 0) revert ContractErrors.InvalidRequest();
-
-            if (req.balanceType == 0) {
-                if (req.amount > state.ownerBalance) revert ContractErrors.LowOwnerBalance();
-                totalOwner += req.amount;
-                state.ownerBalance -= req.amount;
-            } else if (req.balanceType == 1) {
-                if (req.amount > state.feeSystemBalance) revert ContractErrors.LowFeeBalance();
-                totalFee += req.amount;
-                state.feeSystemBalance -= req.amount;
-            } else {
-                if (req.amount > state.fundBalance) revert ContractErrors.LowFundBalance();
-                totalFund += req.amount;
-                state.fundBalance -= req.amount;
-            }
-            usdtToken.safeTransfer(req.recipient, req.amount);
-            unchecked { ++i; }
-        }
-        emit BatchWithdrawalProcessed(totalOwner, totalFee, totalFund);
-    }
-
-    function setPlanDefaultImage(uint256 _planId, string calldata _imageURI) external onlyOwner {
-        if (_planId == 0 || _planId > state.planCount) revert ContractErrors.InvalidPlanID();
-        if (bytes(_imageURI).length == 0) revert ContractErrors.EmptyURI();
-        planDefaultImages[_planId] = _imageURI;
-    }
-
-    function updateMembersPerCycle(uint256 _planId, uint256 _newMembersPerCycle) external onlyOwner {
-        if (_planId == 0 || _planId > state.planCount) revert ContractErrors.InvalidPlanID();
-        if (_newMembersPerCycle == 0) revert ContractErrors.InvalidCycleMembers();
-        plans[_planId].membersPerCycle = _newMembersPerCycle;
-    }
-
-    function setPlanStatus(uint256 _planId, bool _isActive) external onlyOwner {
-        if (_planId == 0 || _planId > state.planCount) revert ContractErrors.InvalidPlanID();
-        plans[_planId].isActive = _isActive;
-    }
-
-    function setPriceFeed(address _priceFeed) external onlyOwner {
-        if (_priceFeed == address(0)) revert ContractErrors.ZeroAddress();
-        priceFeed = _priceFeed;
-    }
-
-    function setBaseURI(string calldata baseURI) external onlyOwner {
-        if (bytes(baseURI).length == 0) revert ContractErrors.EmptyURI();
-        _baseTokenURI = baseURI;
-    }
-
-    function cancelEmergencyWithdraw() external onlyOwner {
-        if (state.emergencyWithdrawRequestTime == 0) revert ContractErrors.NoRequest();
+    function emergencyWithdraw() external onlyOwner nonReentrant noReentrantTransfer {
+        uint256 withdrawnAmount = AdminLib.processEmergencyWithdraw(
+            usdtToken, owner(), state.emergencyWithdrawRequestTime, TIMELOCK_DURATION
+        );
+        
+        state.ownerBalance = 0;
+        state.feeSystemBalance = 0;
+        state.fundBalance = 0;
         state.emergencyWithdrawRequestTime = 0;
-        emit EmergencyWithdrawRequested(0);
-    }
-
-    function restartAfterPause() external onlyOwner {
-        if (!state.paused) revert ContractErrors.NotPaused();
-        state.paused = false;
-        emit ContractPaused(false);
-    }
-
-    function updatePlanPrice(uint256 _planId, uint256 _newPrice) external onlyOwner {
-        if (_planId == 0 || _planId > state.planCount) revert ContractErrors.InvalidPlanID();
-        if (_newPrice == 0) revert ContractErrors.ZeroPrice();
-        uint256 oldPrice = plans[_planId].price;
-        plans[_planId].price = _newPrice;
-        emit PlanPriceUpdated(_planId, oldPrice, _newPrice);
-    }
-
-    function setPaused(bool _paused) external onlyOwner {
-        state.paused = _paused;
-        emit ContractPaused(_paused);
+        
+        emit EmergencyWithdraw(owner(), withdrawnAmount);
     }
 
     function requestEmergencyWithdraw() external onlyOwner {
@@ -572,25 +462,42 @@ contract CryptoMembershipNFT is ERC721Enumerable, Ownable, ReentrancyGuard {
         emit EmergencyWithdrawRequested(block.timestamp);
     }
 
-    function emergencyWithdraw() external onlyOwner nonReentrant noReentrantTransfer {
-        if (state.emergencyWithdrawRequestTime == 0) revert ContractErrors.NoRequest();
-        if (block.timestamp < state.emergencyWithdrawRequestTime + TIMELOCK_DURATION) revert ContractErrors.TimelockActive();
-
-        uint256 contractBalance = usdtToken.balanceOf(address(this));
-        if (contractBalance == 0) revert ContractErrors.ZeroBalance();
-
-        emit EmergencyWithdrawInitiated(block.timestamp, contractBalance);
-        
-        state.ownerBalance = 0;
-        state.feeSystemBalance = 0;
-        state.fundBalance = 0;
-        state.emergencyWithdrawRequestTime = 0;
-        
-        usdtToken.safeTransfer(owner(), contractBalance);
-        emit EmergencyWithdraw(owner(), contractBalance);
+    function setPaused(bool _paused) external onlyOwner {
+        state.paused = _paused;
+        emit ContractPaused(_paused);
     }
 
-    // View functions
+    // View Functions (using ViewLib)
+    function getSystemStats() external view returns (uint256 totalMembers, uint256 totalRevenue, uint256 totalCommission, uint256 ownerFunds, uint256 feeFunds, uint256 fundFunds) {
+        return ViewLib.getSystemStats(
+            totalSupply(),
+            state.ownerBalance,
+            state.feeSystemBalance,
+            state.fundBalance,
+            state.totalCommissionPaid,
+            growthCommission.totalPaid
+        );
+    }
+
+    function getContractStatus() external view returns (bool isPaused, uint256 totalBalance, uint256 memberCount, uint256 currentPlanCount, bool hasEmergencyRequest, uint256 emergencyTimeRemaining) {
+        return ViewLib.getContractStatus(
+            state.paused,
+            usdtToken,
+            totalSupply(),
+            state.planCount,
+            state.emergencyWithdrawRequestTime,
+            TIMELOCK_DURATION
+        );
+    }
+
+    function getPlanInfo(uint256 _planId) external view returns (uint256 price, string memory name, uint256 membersPerCycle, bool isActive, string memory imageURI) {
+        return ViewLib.getPlanInfo(plans, planDefaultImages, _planId, state.planCount);
+    }
+
+    function validateContractBalance() public view returns (bool, uint256, uint256) {
+        return ViewLib.validateContractBalance(usdtToken, state.ownerBalance, state.feeSystemBalance, state.fundBalance);
+    }
+
     function tokenURI(uint256 _tokenId) public view override returns (string memory) {
         if (!_exists(_tokenId)) revert ContractErrors.NonexistentToken();
         NFTImage memory image = tokenImages[_tokenId];
@@ -610,77 +517,6 @@ contract CryptoMembershipNFT is ERC721Enumerable, Ownable, ReentrancyGuard {
                 '"},{"trait_type":"Transferable","value":"No"}]}'
             ))
         ));
-    }
-
-    function getPlanInfo(uint256 _planId) external view returns (uint256 price, string memory name, uint256 membersPerCycle, bool isActive, string memory imageURI) {
-        if (_planId == 0 || _planId > state.planCount) revert ContractErrors.InvalidPlanID();
-        MembershipLib.MembershipPlan memory plan = plans[_planId];
-        return (plan.price, plan.name, plan.membersPerCycle, plan.isActive, planDefaultImages[_planId]);
-    }
-
-    function getPlanCycleInfo(uint256 _planId) external view returns (uint256 currentCycle, uint256 membersInCurrentCycle, uint256 membersPerCycle) {
-        if (_planId == 0 || _planId > state.planCount) revert ContractErrors.InvalidPlanID();
-        MembershipLib.CycleInfo memory cycleInfo = planCycles[_planId];
-        return (cycleInfo.currentCycle, cycleInfo.membersInCurrentCycle, plans[_planId].membersPerCycle);
-    }
-
-    function getSystemStats() external view returns (uint256 totalMembers, uint256 totalRevenue, uint256 totalCommission, uint256 ownerFunds, uint256 feeFunds, uint256 fundFunds) {
-        return (
-            totalSupply(),
-            state.ownerBalance + state.feeSystemBalance + state.fundBalance + state.totalCommissionPaid + growthCommission.totalPaid,
-            state.totalCommissionPaid + growthCommission.totalPaid,
-            state.ownerBalance,
-            state.feeSystemBalance,
-            state.fundBalance
-        );
-    }
-
-    function getContractStatus() external view returns (bool isPaused, uint256 totalBalance, uint256 memberCount, uint256 currentPlanCount, bool hasEmergencyRequest, uint256 emergencyTimeRemaining) {
-        uint256 timeRemaining = state.emergencyWithdrawRequestTime > 0 
-            ? state.emergencyWithdrawRequestTime + TIMELOCK_DURATION - block.timestamp 
-            : 0;
-        return (state.paused, usdtToken.balanceOf(address(this)), totalSupply(), state.planCount, state.emergencyWithdrawRequestTime > 0, timeRemaining);
-    }
-
-    function getNFTImage(uint256 _tokenId) external view returns (string memory imageURI, string memory name, string memory description, uint256 planId, uint256 createdAt) {
-        if (!_exists(_tokenId)) revert ContractErrors.NonexistentToken();
-        NFTImage memory image = tokenImages[_tokenId];
-        return (image.imageURI, image.name, image.description, image.planId, image.createdAt);
-    }
-
-    function getReferralChain(address _member) external view returns (address[] memory) {
-        address[] memory chain = new address[](1);
-        chain[0] = members[_member].upline;
-        return chain;
-    }
-
-    function getOwnerEffectivePlan() external view returns (uint256) {
-        if (msg.sender == owner() && members[msg.sender].planId == 0) {
-            return state.planCount;
-        }
-        return members[msg.sender].planId;
-    }
-
-    function getTotalPlanCount() external view returns (uint256) {
-        return state.planCount;
-    }
-
-    function isTokenTransferable() external pure returns (bool) {
-        return false;
-    }
-
-    function isOwnerWithRootAccess(address _address) external view returns (bool) {
-        return _address == owner() && members[_address].planId == 0;
-    }
-
-    function getMemberPlanId(address _member) external view returns (uint256) {
-        return _member == owner() && members[_member].planId == 0 ? 999 : members[_member].planId;
-    }
-
-    function validateContractBalance() public view returns (bool, uint256, uint256) {
-        uint256 expectedBalance = state.ownerBalance + state.feeSystemBalance + state.fundBalance;
-        uint256 actualBalance = usdtToken.balanceOf(address(this));
-        return (actualBalance >= expectedBalance, expectedBalance, actualBalance);
     }
 
     function _exists(uint256 tokenId) internal view returns (bool) {
