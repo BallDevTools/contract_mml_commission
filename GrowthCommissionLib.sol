@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "./TokenLib.sol";
 import "./MembershipLib.sol";
+import "./ContractErrors.sol";
 
 library GrowthCommissionLib {
     using TokenLib for IERC20;
@@ -22,8 +23,6 @@ library GrowthCommissionLib {
         mapping(uint256 => uint256) rates;
         mapping(address => GrowthCommissionStats) stats;
     }
-
-    // Remove duplicate structs - use the ones from MembershipLib instead
 
     event GrowthCommissionPaid(
         address indexed newMember,

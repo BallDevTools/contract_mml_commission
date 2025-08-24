@@ -4,6 +4,8 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "./MembershipLib.sol";
 import "./GrowthCommissionLib.sol";
+import "./ContractErrors.sol";
+import "./NFTTypes.sol";
 
 library ViewLib {
     function getSystemStats(
