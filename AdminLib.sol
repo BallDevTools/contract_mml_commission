@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "./TokenLib.sol";
 import "./ContractErrors.sol";
+import "./MembershipLib.sol";
 
 library AdminLib {
     using TokenLib for IERC20;
@@ -98,5 +99,40 @@ library AdminLib {
         if (withdrawnAmount == 0) revert ContractErrors.ZeroBalance();
 
         token.safeTransfer(owner, withdrawnAmount);
+    }
+
+    function withdrawFundBalance(
+        IERC20 token,
+        address owner,
+        uint256 amount,
+        uint256 fundBalance
+    ) internal returns (uint256 newFundBalance) {
+        if (amount > fundBalance) revert ContractErrors.LowFundBalance();
+        newFundBalance = fundBalance - amount;
+        token.safeTransfer(owner, amount);
+    }
+
+    function setPlanDefaultImage(uint256 planId, string calldata imageURI, uint256 planCount, mapping(uint256 => string) storage planDefaultImages) internal {
+        if (planId == 0 || planId > planCount) revert ContractErrors.InvalidPlanID();
+        if (bytes(imageURI).length == 0) revert ContractErrors.EmptyURI();
+        planDefaultImages[planId] = imageURI;
+    }
+
+    function updateMembersPerCycle(uint256 planId, uint256 newMembersPerCycle, uint256 planCount, mapping(uint256 => MembershipLib.MembershipPlan) storage plans) internal {
+        if (planId == 0 || planId > planCount) revert ContractErrors.InvalidPlanID();
+        if (newMembersPerCycle == 0) revert ContractErrors.InvalidCycleMembers();
+        plans[planId].membersPerCycle = newMembersPerCycle;
+    }
+
+    function setPlanStatus(uint256 planId, bool isActive, uint256 planCount, mapping(uint256 => MembershipLib.MembershipPlan) storage plans) internal {
+        if (planId == 0 || planId > planCount) revert ContractErrors.InvalidPlanID();
+        plans[planId].isActive = isActive;
+    }
+
+    function updatePlanPrice(uint256 planId, uint256 newPrice, uint256 planCount, mapping(uint256 => MembershipLib.MembershipPlan) storage plans) internal returns (uint256 oldPrice) {
+        if (planId == 0 || planId > planCount) revert ContractErrors.InvalidPlanID();
+        if (newPrice == 0) revert ContractErrors.ZeroPrice();
+        oldPrice = plans[planId].price;
+        plans[planId].price = newPrice;
     }
 }
